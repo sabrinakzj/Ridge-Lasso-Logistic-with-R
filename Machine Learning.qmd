@@ -1,0 +1,160 @@
+---
+title: "Untitled"
+author: "Zixin He"
+format: pdf
+editor: visual
+---
+
+## Package Installation
+
+```{r}
+library(glmnet)
+library(broom)
+library(dplyr)
+library(ggplot2)
+library(rsample)
+
+```
+
+## Data Preparation
+
+```{r}
+# import data set
+data <- read.csv("/Users/hezixin/Downloads/wine_data.csv", header = T)
+
+head(data)
+```
+
+## Plot then check the normalization on the observed Y
+
+```{r}
+data %>%
+  ggplot(aes(x = quality))+
+  geom_bar(fill="steelblue") +
+  theme_classic()
+```
+
+## Prepare the training data and the test data
+
+```{r}
+set.seed(88221)
+
+split <- rsample::initial_split(data, prop=0.8,strata = "quality")
+
+train <- training(split)
+test <- testing(split)
+```
+
+### Correlation of predictors
+
+```{r}
+corr_matrix <- round(cor(data %>% select(-quality)),2)
+
+corr_matrix[upper.tri(corr_matrix)] = NA
+
+melted_corr_matrix <- reshape2::melt(corr_matrix)
+
+melted_corr_matrix %>%
+  ggplot(aes(x = Var1, y = Var2, fill = value))+
+  geom_tile(color='green') +
+  scale_fill_gradient2(low = "blue", high = "red", mid = "white", midpoint = 0,
+  limit=c(-1,1), space = "Lab", name = "Correlation") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, vjust = 1, size = 12, hjust = 1)) +
+  coord_fixed() +
+  geom_text(aes(Var1,Var2,label = round(value, 2)), color = "black", size=3) +
+  xlab("") + ylab("")
+```
+
+## Model trainning and evaluation
+
+```{r}
+#普通最小二乘法回归
+model_ols <- lm(quality ~ . ,data = data)
+
+olsrr::ols_vif_tol(model_ols)
+```
+
+### Predictors dropout(从最高开始drop然后重新测试)
+
+```{r}
+model_drop <- data %>% select(-density) %>% lm(quality ~ ., data = .)
+olsrr::ols_vif_tol(model_drop)
+```
+
+Vif is at the range.
+
+### \_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_上述作验证
+
+# *Elastic Model*
+
+```{r}
+X_train <- as.matrix(train %>% select(-quality))
+Y_train <- as.matrix(train %>% select(quality))
+
+model_elastic_train <- glmnet(x = X_train,y = Y_train,family = "gaussian",
+                            alpha = 0.5,nlambda = 100,standardize = TRUE,thresh = 1e-7)
+
+
+plot(model_elastic_train, label = TRUE)
+```
+
+## Find the best fit lambda
+
+```{r}
+#(coef.glmnet(model_elastic_train))
+print(model_elastic_train)
+```
+
+```{r}
+coef(model_elastic_train, s = c(0.1, 0.01, 0.005, 0.002))
+```
+
+## Cross-validiation to choose the best lambda
+
+```{r}
+#10折交叉验证
+cv_elastic_train <- cv.glmnet(x = X_train,y = Y_train,nfolds = 10)
+plot(cv_elastic_train)
+```
+
+## Lambda(lambda.min/lambda.lse)
+
+```{r}
+#选择min精度高
+#选择lse模型简单 精度稍差但泛化能力强
+cv_elastic_train$lambda.min
+```
+
+### Train the model with the lambda choosed
+
+```{r}
+coef(cv_elastic_train, s = "lambda.min")
+```
+
+## Test the model(Evaluate the performance of a trained `glmnet` model on a test dataset)
+
+```{r}
+newx_test <- as.matrix(test %>% select(-quality))
+newy_test <- as.matrix(test %>% select(quality))
+
+assess.glmnet(model_elastic_train,newx = newx_test,newy = newy_test,s = c(0.02, 0.002))
+```
+
+## Assess the performance of trained elastic model on training data
+
+```{r}
+newx_train <- as.matrix(train %>% select(-quality))
+newy_train <- as.matrix(train %>% select(quality))
+
+assess.glmnet(model_elastic_train,newx = newx_train,newy = newy_train,
+              s = cv_elastic_train$lambda.min) -> cv_assess
+
+sqrt(cv_assess$mse)
+```
+
+```{r}
+
+```
+
+# 2.Logistics Regression
